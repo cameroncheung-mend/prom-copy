@@ -143,12 +143,13 @@ var (
 		ScrapeInterval:     model.Duration(1 * time.Minute),
 		ScrapeTimeout:      model.Duration(10 * time.Second),
 		EvaluationInterval: model.Duration(1 * time.Minute),
+		// When native histogram feature flag is enabled, AcceptScrapeProtocols is equal PrometheusProto, OpenMetricsText, PrometheusText.
+		AcceptScrapeProtocols: []ScrapeProtocol{OpenMetricsText, PrometheusText},
 	}
 
 	// DefaultScrapeConfig is the default scrape configuration.
 	DefaultScrapeConfig = ScrapeConfig{
-		// ScrapeTimeout and ScrapeInterval default to the configured
-		// globals.
+		// ScrapeTimeout, ScrapeInterval and AcceptScrapeProtocols default to the configured globals.
 		ScrapeClassicHistograms: false,
 		MetricsPath:             "/metrics",
 		Scheme:                  "http",
@@ -412,6 +413,54 @@ type GlobalConfig struct {
 	// Keep no more than this many dropped targets per job.
 	// 0 means no limit.
 	KeepDroppedTargets uint `yaml:"keep_dropped_targets,omitempty"`
+	// The protocols to negotiate during a scrape. It tells clients what
+	// protocol are accepted by Prometheus and with what preference (most wanted is first).
+	AcceptScrapeProtocols []ScrapeProtocol `yaml:"accept_scrape_protocols,omitempty"`
+}
+
+// ScrapeProtocol represents supported protocol for pulling metrics (scraping).
+type ScrapeProtocol string
+
+// Equals returns true if two scrape protocol strings are the same (case-insensitive).
+func (s ScrapeProtocol) Equals(other ScrapeProtocol) bool {
+	return strings.EqualFold(string(s), string(other))
+}
+
+// Validate returns error if given scrape protocol is not supported.
+func (s ScrapeProtocol) Validate() error {
+	switch {
+	case s.Equals(PrometheusText):
+	case s.Equals(PrometheusProto):
+	case s.Equals(OpenMetricsText):
+	default:
+		return fmt.Errorf("unknown scrape protocol %v, supported:  %q, %q, %q",
+			s, PrometheusText, PrometheusProto, OpenMetricsText)
+	}
+	return nil
+}
+
+var (
+	PrometheusText  ScrapeProtocol = "PrometheusText"
+	PrometheusProto ScrapeProtocol = "PrometheusProto"
+	OpenMetricsText ScrapeProtocol = "OpenMetricsText"
+)
+
+// validateAcceptScrapeProtocols return errors if we see problems with accept scrape protocols option.
+func validateAcceptScrapeProtocols(sps []ScrapeProtocol) error {
+	if len(sps) == 0 {
+		return errors.New("accept_scrape_protocols cannot be empty")
+	}
+	dups := map[string]struct{}{}
+	for _, sp := range sps {
+		if _, ok := dups[strings.ToLower(string(sp))]; ok {
+			return fmt.Errorf("duplicated protocol in accept_scrape_protocols, got %v", sps)
+		}
+		if err := sp.Validate(); err != nil {
+			return fmt.Errorf("accept_scrape_protocols: %w", err)
+		}
+		dups[strings.ToLower(string(sp))] = struct{}{}
+	}
+	return nil
 }
 
 // SetDirectory joins any relative file paths with dir.
@@ -459,6 +508,14 @@ func (c *GlobalConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	if gc.EvaluationInterval == 0 {
 		gc.EvaluationInterval = DefaultGlobalConfig.EvaluationInterval
 	}
+
+	if gc.AcceptScrapeProtocols == nil {
+		gc.AcceptScrapeProtocols = DefaultGlobalConfig.AcceptScrapeProtocols
+	}
+	if err := validateAcceptScrapeProtocols(gc.AcceptScrapeProtocols); err != nil {
+		return fmt.Errorf("%w for global config", err)
+	}
+
 	*c = *gc
 	return nil
 }
@@ -469,7 +526,8 @@ func (c *GlobalConfig) isZero() bool {
 		c.ScrapeInterval == 0 &&
 		c.ScrapeTimeout == 0 &&
 		c.EvaluationInterval == 0 &&
-		c.QueryLogFile == ""
+		c.QueryLogFile == "" &&
+		c.AcceptScrapeProtocols == nil
 }
 
 type ScrapeConfigs struct {
@@ -520,6 +578,9 @@ type ScrapeConfig struct {
 	// Keep no more than this many dropped targets per job.
 	// 0 means no limit.
 	KeepDroppedTargets uint `yaml:"keep_dropped_targets,omitempty"`
+	// The protocols to negotiate during a scrape. It tells clients what
+	// protocol are accepted by Prometheus and with what preference (most wanted is first).
+	AcceptScrapeProtocols []ScrapeProtocol `yaml:"accept_scrape_protocols,omitempty"`
 
 	// We cannot do proper Go type embedding below as the parser will then parse
 	// values arbitrarily into the overflow maps of further-down types.
@@ -577,6 +638,7 @@ func (c *ScrapeConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
+// Validate validates scrape config, but also fills relevant default values from global config if needed.
 func (c *ScrapeConfig) Validate(globalConfig GlobalConfig) error {
 	if c == nil {
 		return errors.New("empty or null scrape config section")
@@ -616,6 +678,13 @@ func (c *ScrapeConfig) Validate(globalConfig GlobalConfig) error {
 	}
 	if c.KeepDroppedTargets == 0 {
 		c.KeepDroppedTargets = globalConfig.KeepDroppedTargets
+	}
+
+	if c.AcceptScrapeProtocols == nil {
+		c.AcceptScrapeProtocols = globalConfig.AcceptScrapeProtocols
+	}
+	if err := validateAcceptScrapeProtocols(c.AcceptScrapeProtocols); err != nil {
+		return fmt.Errorf("%w for scrape config with job name %q", err, c.JobName)
 	}
 
 	return nil

@@ -202,7 +202,6 @@ func (c *flagConfig) setFeatureListOptions(logger log.Logger) error {
 				level.Info(logger).Log("msg", "No default port will be appended to scrape targets' addresses.")
 			case "native-histograms":
 				c.tsdb.EnableNativeHistograms = true
-				c.scrape.EnableProtobufNegotiation = true
 				level.Info(logger).Log("msg", "Experimental native histogram support enabled.")
 			case "":
 				continue
@@ -454,6 +453,11 @@ func main() {
 	if !agentMode && len(agentOnlyFlags) > 0 {
 		fmt.Fprintf(os.Stderr, "The following flag(s) can only be used in agent mode: %q", agentOnlyFlags)
 		os.Exit(3)
+	}
+
+	if cfg.tsdb.EnableNativeHistograms {
+		// Change global variable. Hacky, but it's hard to pass new option or default to unmarshaller.
+		config.DefaultConfig.GlobalConfig.AcceptScrapeProtocols = []config.ScrapeProtocol{config.PrometheusProto, config.OpenMetricsText, config.PrometheusText}
 	}
 
 	localStoragePath := cfg.serverStoragePath

@@ -121,7 +121,7 @@ scrape_configs:
     label_limit: 35
     label_name_length_limit: 210
     label_value_length_limit: 210
-
+    accept_scrape_protocols: ["prometheusproto"]
 
     metrics_path: /my_path
     scheme: https
